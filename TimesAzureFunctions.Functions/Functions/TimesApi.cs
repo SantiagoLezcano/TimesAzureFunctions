@@ -1,16 +1,18 @@
-﻿using System;
-using System.IO;
-using System.Threading.Tasks;
+﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
 using Microsoft.WindowsAzure.Storage.Table;
+using Newtonsoft.Json;
+using System;
+using System.Globalization;
+using System.IO;
+using System.Threading.Tasks;
 using TimesAzureFunctions.common.Model;
 using TimesAzureFunctions.common.Responses;
 using TimesAzureFunctions.Function.Entities;
+
 
 namespace TimesAzureFunctions.Function.Functions
 {
@@ -24,97 +26,45 @@ namespace TimesAzureFunctions.Function.Functions
         {
             log.LogInformation("C# HTTP trigger function processed a request.");
 
-            string name = req.Query["name"];
-
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            Times time = JsonConvert.DeserializeObject<Times>(requestBody);
-            if (string.IsNullOrEmpty(time?.Id.ToString()))
+            Times tim = JsonConvert.DeserializeObject<Times>(requestBody);
+
+            if (string.IsNullOrEmpty(tim?.Id.ToString()) || string.IsNullOrEmpty(tim?.type.ToString())
+                || (!int.Equals(tim.type, 0) && !int.Equals(tim.type, 1)))
             {
+                log.LogInformation("A bad request was returned");
                 return new BadRequestObjectResult(new Response
                 {
                     IsSuccess = false,
-                    Message = "The request must have a Id"
+                    Message = "The request must have a type 0 or 1 and an id."
                 });
             }
-            string filter = TableQuery.GenerateFilterConditionForInt("Id", QueryComparisons.Equal, time.Id);
-            TableQuery<TimeEntity> query = new TableQuery<TimeEntity>().Where(filter);
-            TableQuerySegment<TimeEntity> registers = await timeTable.ExecuteQuerySegmentedAsync(query, null);
-            int inEmployed = 0;
-            int outEmployed = 0;
-            foreach (TimeEntity register in registers)
-            {
-                if (register.type == 0)
-                {
-                    inEmployed++;
-                }
-                if (register.type == 1)
-                {
-                    outEmployed++;
-                }
-            }
-            TimeEntity timeEntity = null;
-            if (inEmployed != outEmployed)
-            {
-                if (time.type != 1)
-                {
-                    return new BadRequestObjectResult(new Response
-                    {
-                        IsSuccess = false,
-                        Message = "The employee has not marked a output"
-                    });
-                }
-                else
-                {
-                    timeEntity = new TimeEntity
-                    {
-                        Id = time.Id,
-                        dateCreate = time.dateCreate,
-                        type = time.type,
-                        consolidate = false,
-                        ETag = "*",
-                        PartitionKey = "TIME",
-                        RowKey = Guid.NewGuid().ToString()
-                    };
-                }
-            }
-            else
-            {
-                if (time.type != 0)
-                {
-                    return new BadRequestObjectResult(new Response
-                    {
-                        IsSuccess = false,
-                        Message = "The employee has not marked a input"
-                    });
-                }
-                else
-                {
-                    timeEntity = new TimeEntity
-                    {
-                        Id = time.Id,
-                        dateCreate = time.dateCreate,
-                        type = time.type,
-                        consolidate = false,
-                        ETag = "*",
-                        PartitionKey = "TIME",
-                        RowKey = Guid.NewGuid().ToString()
-                    };
-                }
-            }
 
-            TableOperation addOperation = TableOperation.Insert(timeEntity);
+            TimeEntity employeeMonitoringEntity = new TimeEntity
+            {
+                RowKey = Guid.NewGuid().ToString(),
+                ETag = "*",
+                PartitionKey = "EMPLOYEERECORD",
+                Id = tim.Id,
+                type = tim.type,
+                dateCreate = Convert.ToDateTime(tim.dateCreate, new CultureInfo("en-US")),
+                consolidate = false
+            };
+
+            TableOperation addOperation = TableOperation.Insert(employeeMonitoringEntity);
             await timeTable.ExecuteAsync(addOperation);
 
-            string message = "New register stored in a table";
+            string message = "New employee time monitoring record has been stored in table";
             log.LogInformation(message);
 
             return new OkObjectResult(new Response
             {
                 IsSuccess = true,
                 Message = message,
-                Result = timeEntity
+                Result = employeeMonitoringEntity
             });
         }
+
         [FunctionName(nameof(updateEmployed))]
         public static async Task<IActionResult> updateEmployed(
             [HttpTrigger(AuthorizationLevel.Anonymous, "put", Route = "times/{id}")] HttpRequest req,
@@ -172,13 +122,13 @@ namespace TimesAzureFunctions.Function.Functions
         [FunctionName(nameof(GetAllRegister))]
         public static async Task<IActionResult> GetAllRegister(
            [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "times")] HttpRequest req,
-           [Table("times", Connection = "AzureWebJobsStorage")] CloudTable timeEntity,
+           [Table("times", Connection = "AzureWebJobsStorage")] CloudTable times,
            ILogger log)
         {
             log.LogInformation("Get all todos received.");
 
             TableQuery<TimeEntity> query = new TableQuery<TimeEntity>();
-            TableQuerySegment<TimeEntity> timis = await timeEntity.ExecuteQuerySegmentedAsync(query, null);
+            TableQuerySegment<TimeEntity> ti = await times.ExecuteQuerySegmentedAsync(query, null);
 
 
             string message = "Retrieved all register.";
@@ -188,7 +138,7 @@ namespace TimesAzureFunctions.Function.Functions
             {
                 IsSuccess = true,
                 Message = message,
-                Result = timis
+                Result = ti
             });
         }
 
